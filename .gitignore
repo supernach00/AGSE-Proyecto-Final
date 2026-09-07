@@ -1,0 +1,17 @@
+# --- Salida de compilacion de STM32CubeIDE (NO subir) ---
+Debug/
+Release/
+*.o
+*.d
+*.su
+*.cyclo
+*.elf
+*.bin
+*.hex
+*.list
+*.map
+objects.list
+
+# --- Sistema ---
+.DS_Store
+Thumbs.db

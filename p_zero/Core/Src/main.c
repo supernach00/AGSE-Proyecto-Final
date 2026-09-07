@@ -31,7 +31,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define AMP_STEP 248   // ≈ 0.2 V  (0.2 / 3.3 * 4096)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -51,6 +51,7 @@ uint32_t acc[2] = {0, 0};               // acumulador de fase por canal
 volatile uint32_t ftw[2] = {0, 0};      // paso (frequency tuning word) por canal
 volatile uint8_t salida_on[2] = {1, 1}; // on/off por canal
 volatile uint8_t canal = 0;             // canal activo: 0 = canal 1, 1 = canal 2
+volatile int32_t amp[2] = {2048, 2048};   // amplitud pico por canal, en cuentas (2048 = máx = 1.65 V)
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -135,10 +136,11 @@ int main(void)
 	     }
 	     else if (c == 'p') salida_on[canal] = 1;          // play del canal activo
 	     else if (c == 's') salida_on[canal] = 0;          // stop del canal activo
+	     else if (c == '+') { amp[canal] += AMP_STEP; if (amp[canal] > 2048) amp[canal] = 2048; }
+	     else if (c == '-') { amp[canal] -= AMP_STEP; if (amp[canal] < 0)    amp[canal] = 0;    }
 	   }
   }
   /* USER CODE END 3 */
-
 
 /**
   * @brief System Clock Configuration
@@ -345,11 +347,15 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     {
         acc[0] += ftw[0];
         acc[1] += ftw[1];
-        HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R,
-                         salida_on[0] ? sine_table[acc[0] >> 19] : 2048);
 
-        HAL_DAC_SetValue(&hdac, DAC_CHANNEL_2, DAC_ALIGN_12B_R,
-                         salida_on[1] ? sine_table[acc[1] >> 19] : 2048);
+        int32_t c0 = (int32_t)sine_table[acc[0] >> 19] - 2048;   // muestra centrada en 0
+        int32_t c1 = (int32_t)sine_table[acc[1] >> 19] - 2048;
+
+        uint16_t v0 = salida_on[0] ? (uint16_t)(2048 + (c0 * amp[0]) / 2048) : 2048;
+        uint16_t v1 = salida_on[1] ? (uint16_t)(2048 + (c1 * amp[1]) / 2048) : 2048;
+
+        HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, v0);
+        HAL_DAC_SetValue(&hdac, DAC_CHANNEL_2, DAC_ALIGN_12B_R, v1);
     }
 }
 /* USER CODE END 4 */
