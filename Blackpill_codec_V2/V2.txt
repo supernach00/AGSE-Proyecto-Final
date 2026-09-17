@@ -1,0 +1,203 @@
+========================================================================
+GENERADOR DDS V2 (Black Pill F411 + codec PCM3060)
+ 
+========================================================================
+
+------------------------------------------------------------------------
+ 1) PLACA Y RELOJ
+------------------------------------------------------------------------
+ Micro:   STM32F411CEU6 (encapsulado UFQFPN48 -> NO tiene PC6/PC7)
+ Cristal: HSE 25 MHz (WeAct)
+ PLL:     M=25  N=192  P=2  Q=4
+          -> SYSCLK = 96 MHz   |   USB = 48 MHz (exacto, obligatorio)
+ APB1 prescaler = /2  (APB1 max = 50 MHz; sin el /2 da error rosa)
+ Flash latency = 3 WS (a 96 MHz)
+
+ Por que 48 MHz importa: el USB CDC (COM virtual) NO enumera si no hay
+ 48 MHz exactos. Por eso HSE cristal (no HSI) y Q=4.
+
+------------------------------------------------------------------------
+ 2) I2S (AUDIO) - LOS NUMEROS CLAVE
+------------------------------------------------------------------------
+ fs REAL = 48828.125 Hz   (I2SCLK 100 MHz / 2048)   error +1.72% vs 48k
+   OJO: en V1 era 46875 Hz (I2SCLK 96 MHz). En V2 es 48828. Distinto!
+   No importa el error: se compensa en la FTW usando FS = 48828.125
+
+ Los 3 relojes del I2S:
+   LRCK (WS) = fs        = 48828 Hz     -> una muestra estereo por ciclo
+   BCK  (CK) = 64 x fs   = 3.125 MHz    -> un tic por bit
+   MCK       = 256 x fs  = 12.5 MHz     -> motor delta-sigma del codec
+
+ Formato: 24 Bits Data on 32 Bits Frame, I2S Philips, MCK ON
+ Standard = Philips, Mode = Master Transmit (Half-Duplex Master)
+
+ Minimo I2S = 2 relojes (BCK+WS) + 1 dato. Aca 3 (por el MCK del codec).
+
+------------------------------------------------------------------------
+ 3) MUESTRAS / TABLA / BITS  (lo que mas se pregunta)
+------------------------------------------------------------------------
+ Tabla senoidal: 8192 puntos = 2^13   (resolucion HORIZONTAL / fase)
+   Indice = acc >> 19    (32 - 13 = 19)
+   Valores: int32_t, con signo, +-2^23  (min -8388607, max +8388607)
+
+ Muestra: 24 bits UTILES dentro de una caja de 32 bits.
+   Por que 32? Porque en C no hay int24_t -> uso int32 y desprecio 8 bits.
+   Por que +-2^23 y no 2^24? Con signo: mitad arriba, mitad abajo.
+     2^24 niveles TOTALES, pero el PICO de cada lado es 2^23.
+   Paralelo V1: 12 bits -> 4096 niveles, pico +-2^11 (centro 2048).
+
+ TRES ejes que NO hay que mezclar:
+   HORIZONTAL: 8192 puntos (cuantas muestras por ciclo)
+   VERTICAL 1: 32 bits = la CAJA (contenedor int32)
+   VERTICAL 2: 24 bits = lo que se LLENA de senal real (resolucion Y)
+
+------------------------------------------------------------------------
+ 4) COMO VIAJA UNA MUESTRA (registro de 16 bits del I2S)
+------------------------------------------------------------------------
+ El registro de datos (DR) del I2S es de 16 bits.
+ Una muestra de 24 bits -> se manda en 2 transferencias de 16 bits.
+ Un FRAME (L + R)        -> 4 transferencias de 16 bits = 64 bits = 8 bytes
+
+ Partido (MSB primero, es lo que espera el I2S):
+   parte alta = muestra >> 8    (bits 23..8)
+   parte baja = muestra << 8    (bits 7..0 + relleno)
+
+ Orden en el buffer por frame:  L_alta L_baja R_alta R_baja
+
+ Caudal: 48828 frames/s x 2 canales = ~97656 muestras/s de 24 bits
+         ~2.34 Mbps de audio util por la linea SD
+
+------------------------------------------------------------------------
+ 5) BUFFER / DMA
+------------------------------------------------------------------------
+ DMA circular (SPI2_TX, DMA1 Stream4). Nunca para.
+ Buffer = 512 frames, partido en 2 mitades de 256.
+   Mientras el DMA LEE una mitad, el CPU ESCRIBE la otra (nunca chocan).
+   HalfCplt -> lleno 1a mitad   |   Cplt -> lleno 2a mitad
+
+ Las 3 medidas del MISMO buffer (misma bolsa, distintas unidades):
+   FRAMES_TOTAL = 512   -> en frames (muestras estereo)
+   I2S_SIZE     = 1024  -> en muestras de canal (L y R sueltas) [lo pide la HAL]
+   BUF_HW       = 2048  -> en transferencias de 16 bits [tamano del array]
+                = 4096 bytes = 4 KB en RAM
+
+ Relacion: I2S_SIZE = 512 x 2   |   BUF_HW = 512 x 4 = I2S_SIZE x 2
+ (la HAL, en formato 24 bits, duplica sola: le paso 1024, mueve 2048)
+
+ Por que 256 por mitad? Da ~5.3 ms para rellenar (comodo), latencia
+ imperceptible, poca RAM. Ni muy chico (muchas interrupciones) ni grande.
+
+------------------------------------------------------------------------
+ 6) AMPLITUD (volumen)
+------------------------------------------------------------------------
+ salida = (muestra * amp) >> 11        (amp de 0 a 2048)
+   OJO: la multiplicacion va en int64_t! 2^23 * 2^11 = 2^34 (se pasa de 32).
+ AMP_MAX  = 2048  (100% de volumen; denominador de la fraccion)
+ AMP_SHIFT= 11    (2^11 = 2048; dividir por 2048 = >>11)
+ AMP_STEP = 256   (salto por tecla -> 2048/256 = 8 niveles)
+ El 2048 de V2 NO es el de V1: aca es "resolucion del volumen", no bits.
+
+------------------------------------------------------------------------
+ 7) FTW (motor DDS - igual que siempre)
+------------------------------------------------------------------------
+ ftw = fout * 2^32 / FS       con FS = 48828.125
+ 2^32 = 4294967296.0
+ acc[c] += ftw[c]  cada muestra   |   indice = acc[c] >> 19
+ ftw = 0  ->  canal mudo (fase congelada en indice 0)
+
+------------------------------------------------------------------------
+ 8) I2C (CONFIG DEL CODEC)
+------------------------------------------------------------------------
+ Bus: I2C1, 100 kHz (Standard Mode)
+ Direccion: 0x46 (7 bits)  ->  0x8C (0x46 << 1)  para la HAL
+   GOTCHA STM32: la HAL pide la direccion corrida 1 bit (<<1). Si te
+   olvidas, el codec no contesta.
+ Escritura = 2 bytes: [numero de registro, valor]
+
+------------------------------------------------------------------------
+ 9) REGISTROS DEL CODEC (solo los 3 que tocamos)
+------------------------------------------------------------------------
+ Reg 64 = 0xE1  -> despierta el DAC (sale de power-save) + single-ended
+                   *** EL GOTCHA #1: arranca MUDO de fabrica ***
+ Reg 65 = 0xFF  -> volumen DAC L = 0 dB
+ Reg 66 = 0xFF  -> volumen DAC R = 0 dB
+ Hay ~10 registros (0x40..0x49). Solo tocamos lo minimo para el DAC.
+
+ ORDEN al arrancar (importa!):
+   1. arranco I2S por DMA  (asi salen los relojes MCK/BCK/LRCK)
+   2. HAL_Delay(50)        (el codec engancha sus relojes)
+   3. recien ahi pcm_write (config por I2C)
+ Si le hablas antes de que salgan los relojes, no contesta.
+
+------------------------------------------------------------------------
+ 10) MAPEADO PIN A PIN  (Black Pill F411  <->  PCM3060)
+------------------------------------------------------------------------
+ --- AUDIO (I2S) ---
+   Black Pill        Codec         Que es
+   ------------      ---------     ------------------------------------
+   PB12  I2S2_WS  -> LRCK          reloj de canal (fs = 48828 Hz)
+   PB10  I2S2_CK  -> BCK           reloj de bit (64 x fs)   NO PB13!
+   PB15  I2S2_SD  -> DIN           datos de audio al DAC
+   PA3   I2S2_MCK -> SCKI          master clock (256 x fs)  NO PC6!
+
+ --- CONFIG (I2C) ---
+   PB6   I2C1_SCL -> SCL           + pull-up 3k3-4k7 a 3.3V
+   PB7   I2C1_SDA -> SDA           + pull-up 3k3-4k7 a 3.3V
+
+ --- ALIMENTACION Y CONTROL ---
+   3.3V (ST-Link) -> VDD           alimentacion DIGITAL
+   5V   (ESP32)   -> VCC           alimentacion ANALOGICA
+   3.3V           -> RST           SIEMPRE en alto! si no, no prende
+   GND (todos)    -> GND/AGND/DGND masas COMUNES (micro+codec+esp32)
+   (VCOM)            VCOM          NO se conecta a senal: solo capacitor
+                                   de desacople a masa (100 nF)
+
+ --- Capacitores de desacople (ceramicos 100 nF) ---
+   uno en VDD-GND, uno en VCC-GND, uno en VCOM-GND
+
+ --- No van al codec (son del micro) ---
+   PA11  USB D-    |  PA12  USB D+   -> conector USB-C (COM virtual)
+   PA13  SWDIO     |  PA14  SWCLK    -> ST-Link (flasheo)
+
+ Regla de oro: si algo no suena, revisar en orden ->
+   1) RST en alto?  2) pull-ups I2C?  3) masas comunes?  4) reg 64 = 0xE1?
+
+------------------------------------------------------------------------
+ 11) HARDWARE / GOTCHAS QUE MATAN
+------------------------------------------------------------------------
+ - RST del codec SIEMPRE en 3.3V. Si esta bajo -> codec en reset, no prende.
+ - Pull-ups en SCL y SDA (sin ellos no hay config -> queda mudo).
+ - Capacitores de desacople en VDD, VCC y VCOM (100 nF ceramicos sirven).
+ - Alimentacion: VCC (analogica) = 5V  |  VDD (digital) = 3.3V
+     5V salen del ESP32 (esta con USB); 3.3V del ST-Link. MASAS COMUNES.
+ - Salida del DAC: single-ended = 1 cable por canal, centrada en VCOM
+     (~mitad de VCC, ~2.5V), oscila +- alrededor. NO va de 0 a VCC ni +-5.
+ - Para el osciloscopio ESP32 (0-3.3V): divisor /2 (dos 10k) + GND comun.
+ - Clon ST-Link: si no flashea, actualizar firmware SOLO (target desconectado),
+     puerto USB directo, buen cable, CubeIDE cerrado. "device lost when
+     exiting upgrade mode" = en realidad salio bien (re-enumera).
+
+------------------------------------------------------------------------
+ 12) DELTA-SIGMA (por que el MCK tan rapido) - 4 lineas
+------------------------------------------------------------------------
+ DAC comun: muchas resistencias de precision -> imposible a 24 bits.
+ Delta-sigma: pocos niveles (2), conmutados MUY rapido; el promedio
+   temporal = el valor. Precision de AMPLITUD lograda con TIEMPO.
+ Lazo integrador (Sigma) sobre el error (Delta): reparte los unos y
+   empuja el ruido fuera del audio (noise shaping).
+ Por eso MCK = 256*fs = 12.5 MHz: es el motor de todo eso.
+ Dato fino: el carry del acumulador del DDS ES un bitstream delta-sigma
+   de 1er orden. DDS y delta-sigma = el mismo esqueleto (acumulador + resto).
+
+------------------------------------------------------------------------
+ 13) FALTA HACER (pendiente)
+------------------------------------------------------------------------
+ - Parser por USB CDC (COM virtual): recibir comandos de la PC.
+     espacio = cambiar canal (canal ^= 1)
+     numero + Enter = frecuencia -> recalcular ftw[canal]
+     + / - = amplitud (amp[canal] +- AMP_STEP)
+     p / s = play/stop (salida_on[canal])
+     a futuro: forma de onda (seno/cuadrada/triangular/sierra)
+ - Variables volatiles (ftw, amp, salida_on, canal): las toca el parser
+   mientras fill() las lee. Por eso son volatile.
+========================================================================
