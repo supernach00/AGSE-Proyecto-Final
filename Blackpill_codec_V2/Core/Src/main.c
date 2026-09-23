@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "usb_device.h"
+#include <math.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -57,8 +58,6 @@ I2C_HandleTypeDef hi2c1;
 I2S_HandleTypeDef hi2s2;
 DMA_HandleTypeDef hdma_spi2_tx;
 
-UART_HandleTypeDef huart2;
-
 /* USER CODE BEGIN PV */
 uint32_t          acc[2] = {0, 0};              // acumuladores de fase (uno por canal)
 volatile uint32_t ftw[2] = {0, 0};              // FTW de cada canal (lo cambia el parser)
@@ -78,10 +77,10 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2S2_Init(void);
-static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 static void fill(uint16_t *dst);
 static void pcm_write(uint8_t reg, uint8_t val);
+void PCM3060_SetAmplitude(uint32_t amplitud);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -122,11 +121,11 @@ int main(void)
   MX_I2C1_Init();
   MX_I2S2_Init();
   MX_USB_DEVICE_Init();
-  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   // Frecuencia inicial: canal L = 500 Hz, canal R = mudo
   ftw[0] = (uint32_t)(frecuencia * 4294967296.0 / FS);
-  ftw[1] = 0;
+//  ftw[1] = 0;
+  ftw[1] = (uint32_t)(frecuencia * 4294967296.0 / FS);
 
   // Precargo las DOS mitades ANTES de largar el DMA
   fill(&audio_buf[0]);
@@ -150,7 +149,12 @@ int main(void)
   {
     /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
+   // Actualizacion de la frecuencia desde comandos
+   ftw[0] = (uint32_t)(frecuencia * 4294967296.0 / FS);
+   ftw[1] = (uint32_t)(frecuencia * 4294967296.0 / FS);
+
+   PCM3060_SetAmplitude(amplitud);
+   // Actualizacion de la amplitud desde comandos
 
   }
 
@@ -271,39 +275,6 @@ static void MX_I2S2_Init(void)
 }
 
 /**
-  * @brief USART2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART2_Init 0 */
-
-  /* USER CODE END USART2_Init 0 */
-
-  /* USER CODE BEGIN USART2_Init 1 */
-
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART2_Init 2 */
-
-  /* USER CODE END USART2_Init 2 */
-
-}
-
-/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -352,7 +323,7 @@ static void fill(uint16_t *dst)
         {
             acc[c] += ftw[c];                          // avanzo la fase del canal
             int32_t v = sine_table[acc[c] >> 19];      // busco el seno (índice = 13 bits altos)
-            v = (int32_t)(((int64_t)v * amp[c]) >> AMP_SHIFT);  // aplico volumen
+//            v = (int32_t)(((int64_t)v * amp[c]) >> AMP_SHIFT);  // aplico volumen
             if (!salida_on[c]) v = 0;                  // si el canal está mudo → 0
             s[c] = v;
         }
@@ -383,6 +354,31 @@ static void pcm_write(uint8_t reg, uint8_t val)
 {
     uint8_t buf[2] = { reg, val };
     HAL_I2C_Master_Transmit(&hi2c1, PCM_ADDR, buf, 2, HAL_MAX_DELAY);
+}
+
+void PCM3060_SetAmplitude(uint32_t amplitud) // Toma la variable amplitud traida por usb, la convierte a db y escr
+{
+    if (amplitud == 0)
+    {
+        // Mute
+        pcm_write(0x41, 0x00);
+        pcm_write(0x42, 0x00);
+        return;
+    }
+
+    if (amplitud > 100)
+        amplitud = 100;
+
+    float A = amplitud / 100.0f;
+
+    float db = 20.0f * log10f(A);
+
+    int pasos = (int)roundf(-db / 0.5f);
+
+    uint8_t valor = 255 - pasos;
+
+    pcm_write(0x41, valor);  // DAC L
+    pcm_write(0x42, valor);  // DAC R
 }
 /* USER CODE END 4 */
 
