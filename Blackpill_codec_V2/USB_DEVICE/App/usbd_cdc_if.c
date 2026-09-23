@@ -32,6 +32,10 @@
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
 
+float frecuencia = 1000.0f;
+uint32_t amplitud = 50;
+uint8_t salida_activa = 0;
+
 /* USER CODE END PV */
 
 /** @addtogroup STM32_USB_OTG_DEVICE_LIBRARY
@@ -50,6 +54,8 @@
 
 /* USER CODE BEGIN PRIVATE_TYPES */
 
+static void parse_command(char *command);
+
 /* USER CODE END PRIVATE_TYPES */
 
 /**
@@ -62,6 +68,7 @@
   */
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
+#define USB_RX_BUFFER_SIZE 128
 /* USER CODE END PRIVATE_DEFINES */
 
 /**
@@ -94,6 +101,9 @@ uint8_t UserRxBufferFS[APP_RX_DATA_SIZE];
 uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
+
+static uint8_t usb_rx_buffer[USB_RX_BUFFER_SIZE];
+static uint32_t usb_rx_index = 0;
 
 /* USER CODE END PRIVATE_VARIABLES */
 
@@ -261,9 +271,43 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 6 */
+
+  for (uint32_t i = 0; i < *Len; i++)
+  {
+    uint8_t c = Buf[i];
+
+    if (c == '\n')
+    {
+      // Comando completo recibido
+      usb_rx_buffer[usb_rx_index] = '\0';
+
+      // Por ahora simplemente lo devolvemos a la PC
+      CDC_Transmit_FS(usb_rx_buffer, usb_rx_index);
+
+      parse_command((char *) usb_rx_buffer);
+
+      usb_rx_index = 0;
+    }
+    else
+    {
+      if (usb_rx_index < USB_RX_BUFFER_SIZE - 1)
+      {
+        usb_rx_buffer[usb_rx_index++] = c;
+      }
+      else
+      {
+        // Buffer lleno: descartamos el comando
+        usb_rx_index = 0;
+      }
+    }
+  }
+
+  // Preparar el USB para recibir nuevamente
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceFS);
+
   return (USBD_OK);
+
   /* USER CODE END 6 */
 }
 
@@ -316,6 +360,26 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+
+static void parse_command(char *command)
+{
+    if (strncmp(command, "FREQ:", 5) == 0)
+    {
+        frecuencia = atof(&command[5]);
+    }
+    else if (strncmp(command, "AMP:", 4) == 0)
+    {
+        amplitud = atoi(&command[4]);
+    }
+    else if (strcmp(command, "ON") == 0)
+    {
+        salida_activa = 1;
+    }
+    else if (strcmp(command, "OFF") == 0)
+    {
+        salida_activa = 0;
+    }
+}
 
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 

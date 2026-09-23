@@ -57,6 +57,8 @@ I2C_HandleTypeDef hi2c1;
 I2S_HandleTypeDef hi2s2;
 DMA_HandleTypeDef hdma_spi2_tx;
 
+UART_HandleTypeDef huart2;
+
 /* USER CODE BEGIN PV */
 uint32_t          acc[2] = {0, 0};              // acumuladores de fase (uno por canal)
 volatile uint32_t ftw[2] = {0, 0};              // FTW de cada canal (lo cambia el parser)
@@ -64,6 +66,10 @@ volatile uint8_t  salida_on[2] = {1, 1};        // 1 = canal sonando, 0 = mudo
 volatile int32_t  amp[2] = {AMP_MAX, AMP_MAX};  // amplitud de cada canal
 volatile uint8_t  canal = 0;                    // canal "activo" (el que edita el teclado)
 uint16_t          audio_buf[BUF_HW];            // el buffer circular del DMA
+
+extern float frecuencia;
+extern uint32_t amplitud;
+extern uint8_t salida_activa;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -72,6 +78,7 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2S2_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 static void fill(uint16_t *dst);
 static void pcm_write(uint8_t reg, uint8_t val);
@@ -115,9 +122,10 @@ int main(void)
   MX_I2C1_Init();
   MX_I2S2_Init();
   MX_USB_DEVICE_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   // Frecuencia inicial: canal L = 500 Hz, canal R = mudo
-  ftw[0] = (uint32_t)(500.0 * 4294967296.0 / FS);
+  ftw[0] = (uint32_t)(frecuencia * 4294967296.0 / FS);
   ftw[1] = 0;
 
   // Precargo las DOS mitades ANTES de largar el DMA
@@ -143,7 +151,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
   }
+
   /* USER CODE END 3 */
 }
 
@@ -257,6 +267,39 @@ static void MX_I2S2_Init(void)
   /* USER CODE BEGIN I2S2_Init 2 */
 
   /* USER CODE END I2S2_Init 2 */
+
+}
+
+/**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART2_Init 0 */
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
 
 }
 
