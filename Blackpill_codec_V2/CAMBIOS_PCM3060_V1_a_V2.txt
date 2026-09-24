@@ -1,0 +1,284 @@
+================================================================================
+   QUE CAMBIO ENTRE LA PRIMERA VERSION DEL CODEC PCM3060 Y LA VERSION ACTUAL
+   Generador de senales AGSE - STM32F411 (Black Pill) + codec PCM3060
+================================================================================
+
+Este documento compara:
+  - VERSION 1 (V1): la primera vez que pusimos en marcha el PCM3060.
+                    Objetivo: sacar UNA senoidal por el codec y confirmar que
+                    la cadena I2S + codec funcionaba.
+  - VERSION ACTUAL: generador completo, con 4 formas de onda, control por PC
+                    (USB) y por teclado, pantalla OLED y salida diferencial.
+
+Explica QUE cambio, QUE se mantuvo igual, y COMO funciona cada bloque.
+Al final: mapeo pin a pin de TODO (incluyendo resistencias y capacitores).
+
+
+================================================================================
+ 1) RESUMEN RAPIDO (V1  vs  ACTUAL)
+================================================================================
+
+  Aspecto              | V1 (primera)          | ACTUAL
+  ---------------------|-----------------------|------------------------------
+  Resolucion audio     | 16 bits               | 24 bits (real del codec)
+  fs real              | 46875 Hz (I2SCLK 96M) | 48828 Hz (I2SCLK 100M)
+  Formas de onda       | solo senoidal         | senoidal, cuadrada,
+                       |                       | triangular y chirp
+  Frecuencia           | fija (500 Hz)         | ajustable por USB y teclado
+  Amplitud             | fija (fondo de escala)| ajustable (registro del codec)
+  Canales              | 1 (mono)              | 2 canales INDEPENDIENTES
+                       |                       | (freq, amplitud y forma c/u)
+  Salida del DAC       | single-ended (0xE1)   | diferencial O simple, elegible
+                       |                       | desde la PC en caliente
+  Control desde afuera | ninguno               | USB CDC (COM virtual) + teclado
+  Display              | ninguno               | OLED SSD1306 (forma/freq/amp)
+  Reloj                | sin USB               | + USB 48 MHz (para el COM)
+
+
+================================================================================
+ 2) LO QUE **NO** CAMBIO  (el motor sigue siendo el mismo)
+================================================================================
+
+- EL MOTOR DDS. La generacion de la senal sigue siendo:
+    acc[c] += ftw[c];              // acumulador de fase de 32 bits
+    indice  = acc[c] >> 19;        // tabla de 8192 puntos (2^13, shift 32-13)
+    muestra = tabla[indice];
+  La FTW (frequency tuning word) se calcula igual:  ftw = f * 2^32 / fs.
+  Esto es identico a lo del Proyecto Cero: no se toco.
+
+- EL TRANSPORTE POR I2S + DMA. La senal se manda al codec por I2S, y un DMA
+  circular vacia un buffer doble; el CPU rellena media vuelta por vez en los
+  callbacks HalfCplt / Cplt. Ese esquema es el mismo que en V1.
+
+- LA COMUNICACION CON EL CODEC. Dos buses:
+    * I2S = audio (las muestras).
+    * I2C = configuracion (despertar el DAC, volumen, modo de salida).
+  Los pines del codec (I2S e I2C) son los mismos que en V1.
+
+- EL TAMANO DE LA TABLA: 8192 puntos. No cambio.
+
+
+================================================================================
+ 3) LO QUE **SI** CAMBIO  (punto por punto, con el "como funciona")
+================================================================================
+
+--------------------------------------------------------------------------------
+ 3.1  Resolucion: de 16 a 24 bits
+--------------------------------------------------------------------------------
+QUE: el DAC del codec es de 24 bits. En V1 le mandabamos muestras de 16 bits
+     (y la tabla tenia solo 12 bits reales estirados). Ahora usamos 24 bits.
+
+COMO: se genero una tabla senoidal nueva con valores de tipo int32_t, con signo,
+      escalados a +-2^23 (de -8388607 a +8388607). En C no hay int24, por eso el
+      contenedor es de 32 bits pero solo se llenan 24 de senal real.
+      En CubeMX el I2S quedo en "24 Bits Data on 32 Bits Frame".
+      Como el registro del I2S es de 16 bits, cada muestra de 24 se manda en
+      DOS transferencias de 16 (parte alta primero); un frame estereo son 4.
+
+POR QUE 24 y no 32: el DAC es de 24 bits; los 8 de abajo el codec los ignora.
+      Con signo, el pico de cada lado es 2^23 (la mitad va arriba, la mitad
+      abajo del cero), aunque los niveles totales sean 2^24.
+
+--------------------------------------------------------------------------------
+ 3.2  Frecuencia de muestreo: de 46875 a 48828 Hz
+--------------------------------------------------------------------------------
+QUE: la fs real cambio porque cambio la config del PLL de audio (PLLI2S).
+     V1: I2SCLK = 96 MHz  -> 96e6 / 2048 = 46875 Hz.
+     Ahora: I2SCLK = 100 MHz -> 100e6 / 2048 = 48828 Hz (mas cerca de 48k).
+
+COMO: no se controla cada reloj a mano. El I2S deriva los 3 relojes (LRCK=fs,
+      BCK=64*fs, MCK=256*fs) de un solo dato (la fs pedida) mas el formato.
+      Como la fs real no es 48000 exacto, se compensa en la FTW usando el valor
+      real:  #define FS 48828.125  . Asi las frecuencias que se piden salen
+      exactas por la salida.
+
+--------------------------------------------------------------------------------
+ 3.3  Formas de onda: de 1 a 4
+--------------------------------------------------------------------------------
+QUE: antes solo senoidal. Ahora: senoidal, cuadrada, triangular y chirp.
+     Se agrego un modulo aparte (waveforms.c / waveforms.h).
+
+COMO: las 4 salen del MISMO acumulador de fase, interpretandolo distinto:
+      - SENOIDAL:   busca el valor en la tabla ( tabla[acc>>19] ).
+      - CUADRADA:   mira en que mitad de la fase esta (bit alto del acumulador):
+                    primera mitad -> maximo, segunda mitad -> minimo.
+      - TRIANGULAR: usa la fase como rampa: sube en la 1a mitad, baja en la 2a.
+      - CHIRP:      es un seno cuya FRECUENCIA barre en el tiempo (de f0 a f1 y
+                    vuelve a empezar). En vez de una FTW fija, la FTW va subiendo
+                    muestra a muestra. Se configura con chirp_config(f0,f1,dur).
+      Cada canal tiene su propia forma (waveform[2]); se puede cambiar al vuelo.
+
+--------------------------------------------------------------------------------
+ 3.4  Amplitud: ahora por el registro del codec
+--------------------------------------------------------------------------------
+QUE: la amplitud (volumen) ahora se ajusta escribiendo el REGISTRO DE VOLUMEN
+     del codec por I2C, en vez de escalar la muestra por software.
+
+COMO: la variable "amplitud" (0 a 100 %) se convierte a dB y se escribe en los
+      registros 65/66 del codec con PCM3060_SetAmplitude(). El motor de audio
+      genera siempre a fondo de escala; el codec atenua por hardware.
+
+POR QUE: es mas simple y no gasta resolucion de la senal (no se "achica" el
+      numero antes de mandarlo).
+
+--------------------------------------------------------------------------------
+ 3.5  Salida: de single-ended a diferencial
+--------------------------------------------------------------------------------
+QUE: antes la salida del DAC era single-ended fija (1 cable por canal). Ahora se
+     puede ELEGIR entre diferencial (2 cables por canal: VOUT+ y VOUT-) o simple,
+     y se cambia EN CALIENTE desde la PC (no hace falta recompilar).
+
+COMO: es UN bit del registro 64 del codec:
+      0xE1 = DAC ON, single-ended  (bit0 S/E = 1)
+      0xE0 = DAC ON, diferencial   (bit0 S/E = 0)   <-- valor por defecto
+      Desde la app se manda "DIFF" o "SE"; el firmware guarda el modo en la
+      variable modo_diferencial y el loop reescribe el registro 64 SOLO cuando
+      cambia. El teclado no toca esto (solo la PC).
+      En diferencial la senal es (VOUT+) - (VOUT-): mas amplitud y mejor
+      rechazo de ruido.
+
+OJO PARA MEDIR: un osciloscopio comun (o el ADC de un ESP32) mide contra masa
+      (single-ended). Para ver bien el diferencial hace falta un RESTADOR con
+      op-amp (dif -> single) o una punta diferencial. Si se quiere probar rapido
+      contra masa, se puede volver a 0xE1 solo para el test.
+
+--------------------------------------------------------------------------------
+ 3.6  Control desde afuera: USB CDC + teclado 4x4
+--------------------------------------------------------------------------------
+QUE: en V1 no habia forma de cambiar nada (500 Hz fijo). Ahora se controla por
+     DOS vias que conviven (la ultima que tocas manda):
+
+  a) USB CDC (puerto COM virtual):
+     - La Black Pill usa su USB nativo (PA11/PA12) como puerto serie virtual.
+       No hace falta USB-TTL: el propio micro se hace pasar por un COM.
+     - Desde la PC, un programa en Python (comandos.py, con interfaz grafica)
+       manda comandos de texto. Los recibe la funcion CDC_Receive_FS() y un
+       parser los interpreta. Los comandos son POR CANAL (L = izquierdo,
+       R = derecho):
+         LFREQ:<n> / RFREQ:<n>  -> frecuencia del canal
+         LAMP:<n>  / RAMP:<n>   -> amplitud del canal (0-100 %)
+         LON / LOFF / RON / ROFF-> prender / apagar el canal
+         LWAVE:<n> / RWAVE:<n>  -> forma de onda (0=seno 1=cuadrada
+                                   2=triangular 3=chirp)
+         DIFF / SE              -> salida diferencial o simple (global)
+     - La app tiene 4 botones con el dibujo de cada onda (por canal) y un
+       selector Diferencial/Simple.
+
+  b) Teclado matricial 4x4 (modulo keypad.c / keypad.h):
+     - 8 pines: 4 filas (salidas) + 4 columnas (entradas con pull-up).
+     - Barrido (scan): se activa UNA fila en bajo por vez y se leen las columnas;
+       la columna que este en 0 indica que tecla del cruce esta apretada.
+     - Mapeo de teclas:
+         A / B / C / D  -> forma de onda (seno / cuadrada / triangular / chirp)
+         *              -> cambia que se edita: frecuencia <-> amplitud
+         0-9            -> teclea el numero
+         #              -> ENTER: aplica el numero al parametro en edicion
+     - El teclado escribe las MISMAS variables que el USB. No cambia el motor.
+
+--------------------------------------------------------------------------------
+ 3.7  Pantalla OLED
+--------------------------------------------------------------------------------
+QUE: se agrego un display OLED SSD1306 (128x64, I2C) que muestra el estado:
+     canal, forma de onda (con un iconito), frecuencia y amplitud.
+
+COMO: el OLED se cuelga del MISMO bus I2C del codec (direccion 0x3C, distinta a
+      la del codec 0x46). Se usa una libreria (ssd1306) para lo de bajo nivel
+      y un modulo propio (oled.c) que arma la pantalla. Se refresca cada 200 ms.
+      El iconito de la onda se dibuja con lineas (y la tabla senoidal para el
+      seno y el chirp). NO muestra la senal analogica real, solo la FORMA.
+
+--------------------------------------------------------------------------------
+ 3.8  Reloj: se agrego el de USB (48 MHz)
+--------------------------------------------------------------------------------
+QUE: para que el USB CDC enumere, hace falta un reloj de USB de EXACTAMENTE
+     48 MHz. Eso condiciono todo el arbol de relojes.
+
+COMO: con el cristal de 25 MHz (HSE), el PLL quedo:
+      M=25, N=192, P=2, Q=4  ->  SYSCLK = 96 MHz  y  USB = 48 MHz (exacto).
+      APB1 se dejo en /2 (maximo 50 MHz). El PLLI2S da el reloj de audio.
+
+
+================================================================================
+ 4) COMO FUNCIONA, EN CADENA (de la orden al sonido)
+================================================================================
+
+  [PC/comandos.py]--USB-->[CDC_Receive_FS]--> variables (freq/amp)
+  [Teclado 4x4]---------->[keypad_process]--> variables (freq/amp/forma)
+                                      |
+                                      v
+             loop principal: recalcula FTW desde "frecuencia"
+                             aplica amplitud al codec (registro)
+                             refresca el OLED
+                                      |
+                                      v
+   [wave_next] usa acc/ftw + forma -> muestra de 24 bits (por canal)
+                                      |
+                                      v
+   [fill] arma el buffer (parte cada muestra en 2 x 16 bits, L y R)
+                                      |
+                                      v
+   [I2S + DMA circular] saca los 3 relojes y los bits al codec
+                                      |
+                                      v
+   [PCM3060] DAC delta-sigma -> salida analogica DIFERENCIAL (VOUTx+ / VOUTx-)
+
+
+================================================================================
+ 5) MAPEO PIN A PIN DE TODO  (con resistencias y capacitores)
+================================================================================
+
+--- AUDIO: STM32 (I2S2)  ->  PCM3060 ---
+   PB12  I2S2_WS   -> LRCK        (reloj de canal, fs)
+   PB10  I2S2_CK   -> BCK         (reloj de bit, 64*fs)
+   PB15  I2S2_SD   -> DIN         (datos de audio al DAC)
+   PA3   I2S2_MCK  -> SCKI        (master clock, 256*fs)
+
+--- CONFIG: STM32 (I2C1)  ->  PCM3060  (y OLED comparten bus) ---
+   PB6   I2C1_SCL  -> SCL codec + SCL OLED
+   PB7   I2C1_SDA  -> SDA codec + SDA OLED
+   * Resistencias PULL-UP en el bus I2C: 1 en SCL y 1 en SDA, de 3k3 a 4k7,
+     a 3.3V. (Con una sola de cada una para todo el bus alcanza.)
+   Direcciones I2C:  codec = 0x46   |   OLED = 0x3C   (no chocan)
+
+--- PANTALLA: OLED SSD1306 (I2C) ---
+   VCC -> 3.3V   |   GND -> GND   |   SCL -> PB6   |   SDA -> PB7
+   (usa las mismas pull-up del bus I2C; el modulo suele traerlas incluidas)
+
+--- TECLADO: matriz 4x4 (8 pines, sin componentes externos) ---
+   Filas (salidas):            PA0, PA1, PB0, PB1
+   Columnas (entradas):        PB8, PB9, PB13, PB14
+   * Las columnas usan PULL-UP INTERNO del STM32 (config en CubeMX).
+     No hacen falta resistencias externas.
+
+--- USB (puerto COM virtual) ---
+   PA11 -> USB D-   |   PA12 -> USB D+   (al conector USB-C de la placa)
+
+--- PROGRAMACION / DEBUG ---
+   PA13 -> SWDIO    |   PA14 -> SWCLK    (al ST-Link)
+
+--- ALIMENTACION Y CONTROL DEL CODEC ---
+   VDD  (digital)  -> 3.3V
+   VCC  (analogica)-> 5V
+   RST             -> 3.3V  (SIEMPRE en alto; si no, el codec queda en reset)
+   GND / AGND / DGND / SGND -> masa COMUN con el micro (y con lo que mida)
+
+--- CAPACITORES (desacople del codec) ---
+   VDD  - GND : 100 nF ceramico  (+ 10 uF electrolitico recomendado)
+   VCC  - GND : 100 nF ceramico  (+ 10 uF electrolitico recomendado)
+   VCOM - GND : 100 nF ceramico  (+ 10 uF)   (VCOM NO va a senal, solo el cap)
+
+--- SALIDA ANALOGICA (diferencial) ---
+   VOUTL+ / VOUTL-  : canal izquierdo (senal = VOUTL+ menos VOUTL-)
+   VOUTR+ / VOUTR-  : canal derecho
+   * Para medir con osciloscopio single-ended o ADC (ej. ESP32): hace falta un
+     RESTADOR con op-amp (diferencial -> single-ended) + un filtro pasabajos
+     de reconstruccion a la salida. Si se mide una sola pata vs masa, se ve
+     medio recorrido (no ideal).
+   * Si se mide contra masa a un ADC de 3.3V: usar divisor /2 (dos R de 10k) y
+     masa comun, para no pasarse del rango.
+
+================================================================================
+ NOTA: este codigo (formas de onda, OLED, teclado, diferencial, 24 bits) esta
+ escrito y listo, pero fue probado hasta la parte de audio; el teclado, el OLED
+ y el diferencial se confirman al conectar el hardware.
+================================================================================

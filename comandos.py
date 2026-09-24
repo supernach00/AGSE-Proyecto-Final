@@ -100,7 +100,7 @@ class Aplicacion:
         )
 
         self.root.geometry(
-            "700x560"
+            "700x720"
         )
 
         self.stm32 = STM32(self)
@@ -565,6 +565,110 @@ class Aplicacion:
             side="left",
             padx=5
         )
+
+        # panel de forma de onda + modo de salida
+        self.crear_extras()
+
+
+    # ========================================================
+    # FORMA DE ONDA Y MODO DE SALIDA
+    # ========================================================
+
+    def crear_extras(self):
+
+        # --- forma de onda por canal ---
+        cont = ttk.Frame(self.root)
+        cont.pack(pady=10)
+
+        ttk.Label(
+            cont, text="Forma de onda"
+        ).grid(row=0, column=0, columnspan=5, pady=(0, 4))
+
+        formas = ["sine", "square", "tri", "chirp"]
+
+        ttk.Label(cont, text="Izq (L)").grid(row=1, column=0, padx=4)
+        for i, f in enumerate(formas):
+            self.boton_onda(cont, f, "L").grid(row=1, column=1 + i, padx=3, pady=2)
+
+        ttk.Label(cont, text="Der (R)").grid(row=2, column=0, padx=4)
+        for i, f in enumerate(formas):
+            self.boton_onda(cont, f, "R").grid(row=2, column=1 + i, padx=3, pady=2)
+
+        # --- modo de salida (diferencial / simple) ---
+        frame_salida = ttk.Frame(self.root)
+        frame_salida.pack(pady=8)
+
+        ttk.Label(frame_salida, text="Salida:").pack(side="left", padx=5)
+
+        self.modo_salida = tk.StringVar(value="DIFF")
+
+        ttk.Radiobutton(
+            frame_salida, text="Diferencial", variable=self.modo_salida,
+            value="DIFF", command=self.aplicar_salida
+        ).pack(side="left", padx=5)
+
+        ttk.Radiobutton(
+            frame_salida, text="Simple", variable=self.modo_salida,
+            value="SE", command=self.aplicar_salida
+        ).pack(side="left", padx=5)
+
+
+    def boton_onda(self, parent, forma, canal):
+
+        c = tk.Canvas(
+            parent, width=48, height=30, bg="white",
+            highlightthickness=1, highlightbackground="#999", cursor="hand2"
+        )
+        self.dibujar_onda(c, forma)
+        c.bind("<Button-1>", lambda e: self.set_onda(canal, forma))
+        return c
+
+
+    def dibujar_onda(self, c, forma):
+
+        import math
+        w, h = 48, 30
+        mid, amp = h / 2, h / 2 - 4
+        col = "#0B63C4"
+
+        if forma == "sine":
+            pts = []
+            for x in range(2, w - 1):
+                y = mid - amp * math.sin(2 * math.pi * 2 * (x - 2) / (w - 4))
+                pts += [x, y]
+            c.create_line(*pts, fill=col, width=2)
+
+        elif forma == "square":
+            t, b, x0 = 4, h - 4, 2
+            q = (w - 4) // 4
+            c.create_line(x0, t, x0 + q, t, x0 + q, b, x0 + 2 * q, b,
+                          x0 + 2 * q, t, x0 + 3 * q, t, x0 + 3 * q, b,
+                          x0 + 4 * q, b, fill=col, width=2)
+
+        elif forma == "tri":
+            t, b, x0 = 4, h - 4, 2
+            q = (w - 4) // 4
+            c.create_line(x0, b, x0 + q, t, x0 + 2 * q, b,
+                          x0 + 3 * q, t, x0 + 4 * q, b, fill=col, width=2)
+
+        elif forma == "chirp":
+            pts = []
+            for x in range(2, w - 1):
+                tt = (x - 2) / (w - 4)
+                y = mid - amp * math.sin(2 * math.pi * (1 + 5 * tt) * tt)
+                pts += [x, y]
+            c.create_line(*pts, fill=col, width=2)
+
+
+    def set_onda(self, canal, forma):
+
+        idx = {"sine": 0, "square": 1, "tri": 2, "chirp": 3}[forma]
+        self.stm32.enviar(f"{canal}WAVE:{idx}")
+
+
+    def aplicar_salida(self):
+
+        self.stm32.enviar(self.modo_salida.get())   # manda "DIFF" o "SE"
 
 
     # ========================================================

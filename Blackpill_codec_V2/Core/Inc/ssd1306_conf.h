@@ -9,4 +9,7 @@
 #define SSD1306_HEIGHT          64
 #define SSD1306_WIDTH           128
 
+#define SSD1306_INCLUDE_FONT_6x8
+#define SSD1306_INCLUDE_FONT_7x10
+
 #endif

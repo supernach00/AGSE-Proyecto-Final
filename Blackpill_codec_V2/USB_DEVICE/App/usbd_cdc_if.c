@@ -22,32 +22,24 @@
 #include "usbd_cdc_if.h"
 
 /* USER CODE BEGIN INCLUDE */
-
+#include "waveforms.h"
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
-typedef enum {
-
-	LEFT,
-	RIGHT
-
-}canal_e;
-
-typedef enum {
-
-	OFF,
-	ON
-
-}estado_e;
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
 
+typedef enum { LEFT, RIGHT } canal_e;   // indices de canal
+typedef enum { OFF, ON } estado_e;      // estado de salida
+
 float frecuencia[2] = {1000.0f, 1000.0f};
 uint32_t amplitud[2] = {100, 100};
-uint8_t salida_activa[2] = {ON, ON};
+volatile uint8_t salida_activa[2] = {ON, ON};
+
+extern volatile uint8_t modo_diferencial;   // definido en main.c (1=dif, 0=simple)
 
 /* USER CODE END PV */
 
@@ -422,6 +414,30 @@ static void parse_command(char *command)
     else if (strcmp(command, "ROFF") == 0)
     {
         salida_activa[RIGHT] = 0;
+    }
+
+    // Forma de onda canal izquierdo (0=seno 1=cuadrada 2=triangular 3=chirp)
+    else if (strncmp(command, "LWAVE:", 6) == 0)
+    {
+        waveform[LEFT] = (waveform_t)atoi(&command[6]);
+    }
+
+    // Forma de onda canal derecho
+    else if (strncmp(command, "RWAVE:", 6) == 0)
+    {
+        waveform[RIGHT] = (waveform_t)atoi(&command[6]);
+    }
+
+    // Salida diferencial
+    else if (strcmp(command, "DIFF") == 0)
+    {
+        modo_diferencial = 1;
+    }
+
+    // Salida simple (single-ended)
+    else if (strcmp(command, "SE") == 0)
+    {
+        modo_diferencial = 0;
     }
 }
 

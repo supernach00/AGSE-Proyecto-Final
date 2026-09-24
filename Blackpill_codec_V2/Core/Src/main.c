@@ -19,13 +19,14 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "usb_device.h"
-#include <math.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "sine_table.h"
 #include "waveforms.h"
 #include "oled.h"
+#include "keypad.h"
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -80,11 +81,12 @@ volatile uint8_t  salida_estado[2] = {ON, ON};
 volatile int32_t  amp[2] = {AMP_MAX, AMP_MAX};  // amplitud de cada canal
 volatile uint8_t  canal_seleccionado = LEFT;                    // canal "activo" (el que edita el teclado)
 uint16_t          audio_buf[BUF_HW];            // el buffer circular del DMA
+volatile uint8_t  modo_diferencial = 1;         // 1 = salida diferencial, 0 = simple (single-ended)
 
-// Parametros que llegan desde USB
-extern float frecuencia;
-extern uint32_t amplitud;
-extern uint8_t salida_activa;
+// Parametros que llegan desde el USB o el teclado (uno por canal)
+extern float frecuencia[2];
+extern uint32_t amplitud[2];
+extern volatile uint8_t salida_activa[2];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -138,10 +140,9 @@ int main(void)
   MX_I2S2_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
-  // Frecuencia inicial: canal L = 500 Hz, canal R = mudo
-  ftw[0] = (uint32_t)(frecuencia * 4294967296.0 / FS);
-//  ftw[1] = 0;
-  ftw[1] = (uint32_t)(frecuencia * 4294967296.0 / FS);
+  // Frecuencia inicial de cada canal
+  ftw[0] = (uint32_t)(frecuencia[0] * 4294967296.0 / FS);
+  ftw[1] = (uint32_t)(frecuencia[1] * 4294967296.0 / FS);
 
   // Precargo las DOS mitades ANTES de largar el DMA
   fill(&audio_buf[0]);
@@ -154,14 +155,15 @@ int main(void)
   HAL_Delay(50);
 
   // Despierto el codec y subo volúmenes
-  pcm_write(64, 0xE1);   // reg 64: saca el DAC de power-save (ON, single-ended)
+  pcm_write(64, 0xE0);   // reg 64: saca el DAC de power-save (ON, salida DIFERENCIAL)
   pcm_write(65, 0xFF);   // reg 65: volumen DAC L = 0 dB
   pcm_write(66, 0xFF);   // reg 66: volumen DAC R = 0 dB
 
-  // --- OLED + chirp por defecto (agregado) ---
+  // --- OLED + chirp por defecto ---
   oled_init();
   chirp_config(0, 200.0f, 2000.0f, 1.0f);   // chirp por defecto: 200 Hz -> 2 kHz en 1 s
   chirp_config(1, 200.0f, 2000.0f, 1.0f);
+  keypad_init();                            // dejo las filas del teclado en alto
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -170,23 +172,35 @@ int main(void)
   {
     /* USER CODE END WHILE */
 
-   // Actualizacion de la frecuencia desde comandos
-   ftw[0] = (uint32_t)(frecuencia * 4294967296.0 / FS);
-   ftw[1] = (uint32_t)(frecuencia * 4294967296.0 / FS);
+    /* USER CODE BEGIN 3 */
 
-   PCM3060_SetAmplitude(amplitud);
-   // Actualizacion de la amplitud desde comandos
+   // --- Actualizacion de frecuencia y amplitud (vienen del USB o del teclado) ---
+   ftw[0] = (uint32_t)(frecuencia[0] * 4294967296.0 / FS);
+   ftw[1] = (uint32_t)(frecuencia[1] * 4294967296.0 / FS);
+   PCM3060_SetAmplitude(amplitud[canal_seleccionado]);   // volumen por registro del codec
 
-   // --- refresco del OLED cada 200 ms (agregado) ---
+   // --- modo de salida (diferencial / simple): se aplica solo cuando cambia ---
+   static uint8_t last_modo = 0xFF;
+   if (modo_diferencial != last_modo) {
+       last_modo = modo_diferencial;
+       pcm_write(64, modo_diferencial ? 0xE0 : 0xE1);
+   }
+
+   // --- teclado: escaneo cada 20 ms ---
+   static uint32_t last_key = 0;
+   if (HAL_GetTick() - last_key >= 20) {
+       last_key = HAL_GetTick();
+       keypad_process();
+   }
+
+   // --- refresco del OLED cada 200 ms ---
    static uint32_t last_oled = 0;
    if (HAL_GetTick() - last_oled >= 200) {
        last_oled = HAL_GetTick();
        oled_show(canal_seleccionado, waveform[canal_seleccionado],
-                 (uint32_t)frecuencia, (uint8_t)amplitud);
+                 (uint32_t)frecuencia[canal_seleccionado], (uint8_t)amplitud[canal_seleccionado]);
    }
-
   }
-
   /* USER CODE END 3 */
 }
 
@@ -326,6 +340,7 @@ static void MX_DMA_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
@@ -334,6 +349,32 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_SET);
+
+  /*Configure GPIO pins : PA0 PA1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB0 PB1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB13 PB14 PB8 PB9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_8|GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -351,9 +392,8 @@ static void fill(uint16_t *dst)
         for (int c = 0; c < 2; c++)
         {
             int32_t v = wave_next(c);                  // avanza la fase y da la muestra segun la forma de onda
-//            v = (int32_t)(((int64_t)v * amp[c]) >> AMP_SHIFT);  // aplico volumen
-            if (!salida_estado[c]) v = 0;                  // si el canal está mudo → 0
-            s[c] = v;
+            if (!salida_activa[c]) v = 0;              // si el canal esta apagado -> silencio
+            s[c] = v;                                  // si el canal está mudo → 0
         }
 
         // canal L: parto la muestra de 24 bits en 2 halfwords (MSB primero)
