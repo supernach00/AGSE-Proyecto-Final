@@ -56,10 +56,6 @@ typedef enum {
 #define BUF_HW       (FRAMES_TOTAL * 4)// halfwords totales: 2 canales x 2 hw c/u (2048)
 #define I2S_SIZE     (FRAMES_TOTAL * 2)// "muestras de 32 bits" que le pasamos a la HAL (1024)
 
-#define AMP_MAX      2048              // amplitud plena (la fracción es amp/2048)
-#define AMP_SHIFT    11                // 2^11 = 2048  (para dividir con un shift)
-#define AMP_STEP     256               // cuánto sube/baja la amplitud por tecla (8 pasos)
-
 #define PCM_ADDR     (0x46 << 1)       // dirección I2C del codec: 7 bits corridos a 8
 /* USER CODE END PD */
 
@@ -77,8 +73,6 @@ DMA_HandleTypeDef hdma_spi2_tx;
 /* USER CODE BEGIN PV */
 uint32_t          acc[2] = {0, 0};              // acumuladores de fase (uno por canal)
 volatile uint32_t ftw[2] = {0, 0};              // FTW de cada canal (lo cambia el parser)
-volatile uint8_t  salida_estado[2] = {ON, ON};
-volatile int32_t  amp[2] = {AMP_MAX, AMP_MAX};  // amplitud de cada canal
 volatile uint8_t  canal_seleccionado = LEFT;                    // canal "activo" (el que edita el teclado)
 uint16_t          audio_buf[BUF_HW];            // el buffer circular del DMA
 volatile uint8_t  modo_diferencial = 1;         // 1 = salida diferencial, 0 = simple (single-ended)
