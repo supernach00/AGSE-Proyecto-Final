@@ -98,7 +98,7 @@ static void MX_I2S2_Init(void);
 /* USER CODE BEGIN PFP */
 static void fill(uint16_t *dst);
 static void pcm_write(uint8_t reg, uint8_t val);
-void PCM3060_SetAmplitude(uint32_t amplitud);
+void PCM3060_SetAmplitude(uint8_t canal, uint32_t amplitud);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -177,7 +177,8 @@ int main(void)
    // --- Actualizacion de frecuencia y amplitud (vienen del USB o del teclado) ---
    ftw[0] = (uint32_t)(frecuencia[0] * 4294967296.0 / FS);
    ftw[1] = (uint32_t)(frecuencia[1] * 4294967296.0 / FS);
-   PCM3060_SetAmplitude(amplitud[canal_seleccionado]);   // volumen por registro del codec
+   PCM3060_SetAmplitude(0, amplitud[0]);   // volumen del canal L (registro del codec)
+   PCM3060_SetAmplitude(1, amplitud[1]);   // volumen del canal R (registro del codec)
 
    // --- modo de salida (diferencial / simple): se aplica solo cuando cambia ---
    static uint8_t last_modo = 0xFF;
@@ -424,13 +425,13 @@ static void pcm_write(uint8_t reg, uint8_t val)
     HAL_I2C_Master_Transmit(&hi2c1, PCM_ADDR, buf, 2, HAL_MAX_DELAY);
 }
 
-void PCM3060_SetAmplitude(uint32_t amplitud) // Toma la variable amplitud traida por usb, la convierte a db y escr
+void PCM3060_SetAmplitude(uint8_t canal, uint32_t amplitud) // Toma la variable amplitud traida por usb, la convierte a db y escr
 {
+    uint8_t reg = (canal == 0) ? 0x41 : 0x42;   // 0x41 = DAC L, 0x42 = DAC R
+
     if (amplitud == 0)
     {
-        // Mute
-        pcm_write(0x41, 0x00);
-        pcm_write(0x42, 0x00);
+        pcm_write(reg, 0x00);   // mute de ese canal
         return;
     }
 
@@ -445,8 +446,7 @@ void PCM3060_SetAmplitude(uint32_t amplitud) // Toma la variable amplitud traida
 
     uint8_t valor = 255 - pasos;
 
-    pcm_write(0x41, valor);  // DAC L
-    pcm_write(0x42, valor);  // DAC R
+    pcm_write(reg, valor);   // volumen de ese canal
 }
 /* USER CODE END 4 */
 
