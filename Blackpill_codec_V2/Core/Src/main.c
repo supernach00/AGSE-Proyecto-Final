@@ -24,6 +24,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "sine_table.h"
+#include "waveforms.h"
+#include "oled.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -155,6 +157,11 @@ int main(void)
   pcm_write(64, 0xE1);   // reg 64: saca el DAC de power-save (ON, single-ended)
   pcm_write(65, 0xFF);   // reg 65: volumen DAC L = 0 dB
   pcm_write(66, 0xFF);   // reg 66: volumen DAC R = 0 dB
+
+  // --- OLED + chirp por defecto (agregado) ---
+  oled_init();
+  chirp_config(0, 200.0f, 2000.0f, 1.0f);   // chirp por defecto: 200 Hz -> 2 kHz en 1 s
+  chirp_config(1, 200.0f, 2000.0f, 1.0f);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -169,6 +176,14 @@ int main(void)
 
    PCM3060_SetAmplitude(amplitud);
    // Actualizacion de la amplitud desde comandos
+
+   // --- refresco del OLED cada 200 ms (agregado) ---
+   static uint32_t last_oled = 0;
+   if (HAL_GetTick() - last_oled >= 200) {
+       last_oled = HAL_GetTick();
+       oled_show(canal_seleccionado, waveform[canal_seleccionado],
+                 (uint32_t)frecuencia, (uint8_t)amplitud);
+   }
 
   }
 
@@ -335,8 +350,7 @@ static void fill(uint16_t *dst)
 
         for (int c = 0; c < 2; c++)
         {
-            acc[c] += ftw[c];                          // avanzo la fase del canal
-            int32_t v = sine_table[acc[c] >> 19];      // busco el seno (índice = 13 bits altos)
+            int32_t v = wave_next(c);                  // avanza la fase y da la muestra segun la forma de onda
 //            v = (int32_t)(((int64_t)v * amp[c]) >> AMP_SHIFT);  // aplico volumen
             if (!salida_estado[c]) v = 0;                  // si el canal está mudo → 0
             s[c] = v;
