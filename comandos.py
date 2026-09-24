@@ -1,34 +1,40 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import ttk, messagebox
 import serial
 import serial.tools.list_ports
 
 
 # ============================================================
-# Comunicación con el STM32
+# COMUNICACIÓN CON EL STM32
 # ============================================================
 
 class STM32:
 
-    def __init__(self):
+    def __init__(self, app):
         self.ser = None
+        self.app = app
 
     def conectar(self, puerto):
+
         try:
+
             self.ser = serial.Serial(
                 puerto,
                 115200,
                 timeout=1
             )
 
+            self.app.actualizar_indicador(True)
+
             return True
 
         except serial.SerialException as e:
-            self.ser = None
+
+            self.app.actualizar_indicador(False)
 
             messagebox.showerror(
-                "Error de conexión",
-                f"No se pudo conectar al STM32:\n\n{e}"
+                "Error",
+                f"No se pudo abrir el puerto:\n{e}"
             )
 
             return False
@@ -40,39 +46,47 @@ class STM32:
 
         self.ser = None
 
+        self.app.actualizar_indicador(False)
+
     def enviar(self, comando):
 
         if self.ser is None or not self.ser.is_open:
+
+            self.app.actualizar_indicador(False)
+
             messagebox.showwarning(
                 "Sin conexión",
-                "El STM32 no está conectado."
+                "Primero conectá el STM32."
             )
-            return False
 
-        mensaje = comando + "\n"
+            return False
 
         try:
 
-            self.ser.write(mensaje.encode())
+            mensaje = comando + "\n"
 
-            print("TX:", mensaje.strip())
+            self.ser.write(
+                mensaje.encode()
+            )
+
+            print("TX:", comando)
 
             return True
 
         except serial.SerialException as e:
 
+            self.desconectar()
+
             messagebox.showerror(
                 "Error USB",
-                f"No se pudo enviar el comando al STM32:\n\n{e}"
+                f"No se pudo enviar el comando:\n{e}"
             )
-
-            self.desconectar()
 
             return False
 
 
 # ============================================================
-# Aplicación
+# APLICACIÓN
 # ============================================================
 
 class Aplicacion:
@@ -81,323 +95,770 @@ class Aplicacion:
 
         self.root = root
 
-        self.root.title("Generador de señales")
-
-        self.root.geometry("450x450")
-
-        self.stm32 = STM32()
-
-
-        # ====================================================
-        # TÍTULO
-        # ====================================================
-
-        titulo = tk.Label(
-            root,
-            text="Generador de señales",
-            font=("Arial", 20)
+        self.root.title(
+            "Generador de señales - STM32"
         )
 
-        titulo.pack(pady=15)
-
-
-        # ====================================================
-        # PUERTO USB
-        # ====================================================
-
-        frame_puerto = tk.Frame(root)
-
-        frame_puerto.pack(pady=5)
-
-        tk.Label(
-            frame_puerto,
-            text="Puerto USB:"
-        ).pack(side="left", padx=5)
-
-
-        self.puerto_var = tk.StringVar()
-
-        self.puertos = self.obtener_puertos()
-
-
-        if self.puertos:
-            self.puerto_var.set(self.puertos[0])
-        else:
-            self.puerto_var.set("No hay puertos")
-
-
-        self.menu_puertos = tk.OptionMenu(
-            frame_puerto,
-            self.puerto_var,
-            *self.puertos
+        self.root.geometry(
+            "700x560"
         )
 
-        self.menu_puertos.pack(side="left")
+        self.stm32 = STM32(self)
 
+        # ----------------------------------------------------
+        # VARIABLES
+        # ----------------------------------------------------
+
+        self.frecuencia_L = tk.StringVar(
+            value="1000"
+        )
+
+        self.frecuencia_R = tk.StringVar(
+            value="1000"
+        )
+
+        # Amplitud interna SIEMPRE en porcentaje
+
+        self.amplitud_L = tk.IntVar(
+            value=50
+        )
+
+        self.amplitud_R = tk.IntVar(
+            value=50
+        )
+
+        # Unidad seleccionada
+
+        self.unidad_amp_L = tk.StringVar(
+            value="%"
+        )
+
+        self.unidad_amp_R = tk.StringVar(
+            value="%"
+        )
+
+        self.estado_L = False
+        self.estado_R = False
+
+        # ----------------------------------------------------
+        # INTERFAZ
+        # ----------------------------------------------------
+
+        self.crear_interfaz()
+
+        self.actualizar_puertos()
+
+
+    # ========================================================
+    # INTERFAZ
+    # ========================================================
+
+    def crear_interfaz(self):
 
         # ====================================================
-        # BOTÓN CONECTAR
+        # CONEXIÓN
         # ====================================================
 
-        self.boton_conectar = tk.Button(
-            root,
+        frame_conexion = ttk.Frame(
+            self.root,
+            padding=10
+        )
+
+        frame_conexion.pack(
+            fill="x"
+        )
+
+        ttk.Label(
+            frame_conexion,
+            text="Puerto:"
+        ).pack(
+            side="left"
+        )
+
+        self.combo_puertos = ttk.Combobox(
+            frame_conexion,
+            state="readonly",
+            width=15
+        )
+
+        self.combo_puertos.pack(
+            side="left",
+            padx=5
+        )
+
+        ttk.Button(
+            frame_conexion,
+            text="Actualizar",
+            command=self.actualizar_puertos
+        ).pack(
+            side="left",
+            padx=5
+        )
+
+        self.boton_conectar = ttk.Button(
+            frame_conexion,
             text="Conectar",
-            width=15,
             command=self.conectar
         )
 
-        self.boton_conectar.pack(pady=5)
-
-
-        # ====================================================
-        # ESTADO
-        # ====================================================
-
-        self.estado = tk.Label(
-            root,
-            text="Desconectado",
-            fg="red"
+        self.boton_conectar.pack(
+            side="left",
+            padx=5
         )
 
-        self.estado.pack(pady=5)
+        # ----------------------------------------------------
+        # INDICADOR
+        # ----------------------------------------------------
 
-
-        # ====================================================
-        # FRECUENCIA
-        # ====================================================
-
-        frame_frecuencia = tk.Frame(root)
-
-        frame_frecuencia.pack(pady=15)
-
-
-        tk.Label(
-            frame_frecuencia,
-            text="Frecuencia (Hz):"
-        ).pack(side="left", padx=5)
-
-
-        self.frecuencia = tk.Entry(
-            frame_frecuencia,
-            width=12
+        self.indicador = tk.Canvas(
+            frame_conexion,
+            width=20,
+            height=20,
+            highlightthickness=0
         )
 
-        self.frecuencia.insert(0, "1000")
+        self.indicador.pack(
+            side="left",
+            padx=(15, 5)
+        )
 
-        self.frecuencia.pack(side="left", padx=5)
+        self.luz = self.indicador.create_oval(
+            3,
+            3,
+            17,
+            17,
+            fill="red",
+            outline="black"
+        )
 
+        self.label_estado = ttk.Label(
+            frame_conexion,
+            text="Desconectado"
+        )
 
-        self.boton_frecuencia = tk.Button(
-            root,
+        self.label_estado.pack(
+            side="left"
+        )
+
+        # ====================================================
+        # SEPARADOR
+        # ====================================================
+
+        ttk.Separator(
+            self.root,
+            orient="horizontal"
+        ).pack(
+            fill="x",
+            padx=10,
+            pady=5
+        )
+
+        # ====================================================
+        # CANALES
+        # ====================================================
+
+        frame_canales = ttk.Frame(
+            self.root,
+            padding=10
+        )
+
+        frame_canales.pack(
+            fill="both",
+            expand=True
+        )
+
+        # ====================================================
+        # CANAL LEFT
+        # ====================================================
+
+        frame_L = ttk.Frame(
+            frame_canales,
+            padding=15
+        )
+
+        frame_L.pack(
+            side="left",
+            fill="both",
+            expand=True
+        )
+
+        ttk.Label(
+            frame_L,
+            text="CANAL LEFT",
+            font=("Arial", 16, "bold")
+        ).pack(
+            pady=10
+        )
+
+        # ----------------------------------------------------
+        # FRECUENCIA L
+        # ----------------------------------------------------
+
+        ttk.Label(
+            frame_L,
+            text="Frecuencia (Hz)"
+        ).pack(
+            pady=(10, 2)
+        )
+
+        self.entry_freq_L = ttk.Entry(
+            frame_L,
+            textvariable=self.frecuencia_L,
+            width=15,
+            justify="center"
+        )
+
+        self.entry_freq_L.pack()
+
+        ttk.Button(
+            frame_L,
             text="Aplicar frecuencia",
-            command=self.actualizar_frecuencia
+            command=self.actualizar_frecuencia_L
+        ).pack(
+            pady=5
         )
 
-        self.boton_frecuencia.pack(pady=5)
+        # ----------------------------------------------------
+        # AMPLITUD L
+        # ----------------------------------------------------
 
+        ttk.Label(
+            frame_L,
+            text="Amplitud"
+        ).pack(
+            pady=(20, 2)
+        )
 
-        # ====================================================
-        # AMPLITUD
-        # ====================================================
+        # Selector de unidad
 
-        tk.Label(
-            root,
-            text="Amplitud (%)"
-        ).pack(pady=(15, 0))
+        self.combo_unidad_L = ttk.Combobox(
+            frame_L,
+            textvariable=self.unidad_amp_L,
+            values=["%", "V"],
+            state="readonly",
+            width=5
+        )
 
+        self.combo_unidad_L.pack(
+            pady=2
+        )
 
-        self.amplitud = tk.Scale(
-            root,
+        self.combo_unidad_L.bind(
+            "<<ComboboxSelected>>",
+            self.cambiar_unidad_L
+        )
+
+        self.label_amp_L = ttk.Label(
+            frame_L,
+            text="50 %"
+        )
+
+        self.label_amp_L.pack()
+
+        # Slider siempre representa 0-100 %
+
+        self.slider_L = ttk.Scale(
+            frame_L,
             from_=0,
             to=100,
             orient="horizontal",
-            length=300
+            command=self.cambiar_slider_L
         )
 
-        self.amplitud.set(50)
+        self.slider_L.set(50)
 
-        self.amplitud.pack()
+        self.slider_L.pack(
+            fill="x",
+            padx=20,
+            pady=5
+        )
 
-
-        # ====================================================
-        # BOTÓN ACTUALIZAR AMPLITUD
-        # ====================================================
-
-        self.boton_amplitud = tk.Button(
-            root,
+        ttk.Button(
+            frame_L,
             text="Actualizar amplitud",
-            command=self.actualizar_amplitud
+            command=self.actualizar_amplitud_L
+        ).pack(
+            pady=5
         )
 
-        self.boton_amplitud.pack(pady=5)
+        # ----------------------------------------------------
+        # ON / OFF L
+        # ----------------------------------------------------
 
+        frame_botones_L = ttk.Frame(
+            frame_L
+        )
 
-        # ====================================================
-        # ON / OFF
-        # ====================================================
+        frame_botones_L.pack(
+            pady=30
+        )
 
-        frame_salida = tk.Frame(root)
-
-        frame_salida.pack(pady=20)
-
-
-        self.boton_on = tk.Button(
-            frame_salida,
+        ttk.Button(
+            frame_botones_L,
             text="ON",
-            width=12,
-            command=self.encender
+            command=self.encender_L
+        ).pack(
+            side="left",
+            padx=5
         )
 
-        self.boton_on.pack(side="left", padx=10)
-
-
-        self.boton_off = tk.Button(
-            frame_salida,
+        ttk.Button(
+            frame_botones_L,
             text="OFF",
-            width=12,
-            command=self.apagar
+            command=self.apagar_L
+        ).pack(
+            side="left",
+            padx=5
         )
 
-        self.boton_off.pack(side="left", padx=10)
-
-
         # ====================================================
-        # CIERRE DE LA VENTANA
+        # SEPARADOR VERTICAL
         # ====================================================
 
-        self.root.protocol(
-            "WM_DELETE_WINDOW",
-            self.cerrar
+        ttk.Separator(
+            frame_canales,
+            orient="vertical"
+        ).pack(
+            side="left",
+            fill="y",
+            padx=5
+        )
+
+        # ====================================================
+        # CANAL RIGHT
+        # ====================================================
+
+        frame_R = ttk.Frame(
+            frame_canales,
+            padding=15
+        )
+
+        frame_R.pack(
+            side="left",
+            fill="both",
+            expand=True
+        )
+
+        ttk.Label(
+            frame_R,
+            text="CANAL RIGHT",
+            font=("Arial", 16, "bold")
+        ).pack(
+            pady=10
+        )
+
+        # ----------------------------------------------------
+        # FRECUENCIA R
+        # ----------------------------------------------------
+
+        ttk.Label(
+            frame_R,
+            text="Frecuencia (Hz)"
+        ).pack(
+            pady=(10, 2)
+        )
+
+        self.entry_freq_R = ttk.Entry(
+            frame_R,
+            textvariable=self.frecuencia_R,
+            width=15,
+            justify="center"
+        )
+
+        self.entry_freq_R.pack()
+
+        ttk.Button(
+            frame_R,
+            text="Aplicar frecuencia",
+            command=self.actualizar_frecuencia_R
+        ).pack(
+            pady=5
+        )
+
+        # ----------------------------------------------------
+        # AMPLITUD R
+        # ----------------------------------------------------
+
+        ttk.Label(
+            frame_R,
+            text="Amplitud"
+        ).pack(
+            pady=(20, 2)
+        )
+
+        self.combo_unidad_R = ttk.Combobox(
+            frame_R,
+            textvariable=self.unidad_amp_R,
+            values=["%", "V"],
+            state="readonly",
+            width=5
+        )
+
+        self.combo_unidad_R.pack(
+            pady=2
+        )
+
+        self.combo_unidad_R.bind(
+            "<<ComboboxSelected>>",
+            self.cambiar_unidad_R
+        )
+
+        self.label_amp_R = ttk.Label(
+            frame_R,
+            text="50 %"
+        )
+
+        self.label_amp_R.pack()
+
+        # Slider 0-100 %
+
+        self.slider_R = ttk.Scale(
+            frame_R,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            command=self.cambiar_slider_R
+        )
+
+        self.slider_R.set(50)
+
+        self.slider_R.pack(
+            fill="x",
+            padx=20,
+            pady=5
+        )
+
+        ttk.Button(
+            frame_R,
+            text="Actualizar amplitud",
+            command=self.actualizar_amplitud_R
+        ).pack(
+            pady=5
+        )
+
+        # ----------------------------------------------------
+        # ON / OFF R
+        # ----------------------------------------------------
+
+        frame_botones_R = ttk.Frame(
+            frame_R
+        )
+
+        frame_botones_R.pack(
+            pady=30
+        )
+
+        ttk.Button(
+            frame_botones_R,
+            text="ON",
+            command=self.encender_R
+        ).pack(
+            side="left",
+            padx=5
+        )
+
+        ttk.Button(
+            frame_botones_R,
+            text="OFF",
+            command=self.apagar_R
+        ).pack(
+            side="left",
+            padx=5
         )
 
 
     # ========================================================
-    # OBTENER PUERTOS SERIE
+    # INDICADOR DE CONEXIÓN
     # ========================================================
 
-    def obtener_puertos(self):
+    def actualizar_indicador(self, conectado):
+
+        if conectado:
+
+            self.indicador.itemconfig(
+                self.luz,
+                fill="green"
+            )
+
+            self.label_estado.config(
+                text="Conectado"
+            )
+
+            self.boton_conectar.config(
+                text="Conectado",
+                state="disabled"
+            )
+
+        else:
+
+            self.indicador.itemconfig(
+                self.luz,
+                fill="red"
+            )
+
+            self.label_estado.config(
+                text="Desconectado"
+            )
+
+            self.boton_conectar.config(
+                text="Conectar",
+                state="normal"
+            )
+
+
+    # ========================================================
+    # PUERTOS
+    # ========================================================
+
+    def actualizar_puertos(self):
 
         puertos = serial.tools.list_ports.comports()
 
-        return [puerto.device for puerto in puertos]
+        nombres = [
+            puerto.device
+            for puerto in puertos
+        ]
+
+        self.combo_puertos["values"] = nombres
+
+        if nombres:
+            self.combo_puertos.current(0)
 
 
     # ========================================================
-    # CONECTAR
+    # CONEXIÓN
     # ========================================================
 
     def conectar(self):
 
-        puerto = self.puerto_var.get()
+        puerto = self.combo_puertos.get()
 
-        if puerto == "No hay puertos":
+        if not puerto:
 
             messagebox.showwarning(
-                "Sin puerto",
-                "No hay ningún puerto serie disponible."
+                "Puerto",
+                "Seleccioná un puerto."
             )
 
             return
 
+        self.stm32.conectar(puerto)
 
-        if self.stm32.conectar(puerto):
 
-            self.estado.config(
-                text=f"Conectado: {puerto}",
-                fg="green"
+    # ========================================================
+    # CONVERSIÓN DE AMPLITUD
+    # ========================================================
+
+    def porcentaje_a_voltaje(self, porcentaje):
+
+        return (
+            porcentaje / 100.0
+        ) * 3.3
+
+
+    def voltaje_a_porcentaje(self, voltaje):
+
+        porcentaje = (
+            voltaje / 3.3
+        ) * 100.0
+
+        return porcentaje
+
+
+    # ========================================================
+    # CANAL LEFT
+    # ========================================================
+
+    def cambiar_slider_L(self, valor):
+
+        porcentaje = int(
+            float(valor)
+        )
+
+        self.amplitud_L.set(
+            porcentaje
+        )
+
+        if self.unidad_amp_L.get() == "%":
+
+            self.label_amp_L.config(
+                text=f"{porcentaje} %"
             )
 
-            print("Conectado a:", puerto)
+        else:
+
+            voltaje = self.porcentaje_a_voltaje(
+                porcentaje
+            )
+
+            self.label_amp_L.config(
+                text=f"{voltaje:.2f} V"
+            )
 
 
-    # ========================================================
-    # ACTUALIZAR FRECUENCIA
-    # ========================================================
+    def cambiar_unidad_L(self, event=None):
 
-    def actualizar_frecuencia(self):
+        porcentaje = self.amplitud_L.get()
+
+        if self.unidad_amp_L.get() == "%":
+
+            self.label_amp_L.config(
+                text=f"{porcentaje} %"
+            )
+
+        else:
+
+            voltaje = self.porcentaje_a_voltaje(
+                porcentaje
+            )
+
+            self.label_amp_L.config(
+                text=f"{voltaje:.2f} V"
+            )
+
+
+    def actualizar_amplitud_L(self):
+
+        porcentaje = self.amplitud_L.get()
+
+        self.stm32.enviar(
+            f"LAMP:{porcentaje}"
+        )
+
+
+    def actualizar_frecuencia_L(self):
 
         try:
 
             frecuencia = float(
-                self.frecuencia.get()
+                self.frecuencia_L.get()
+            )
+
+            if frecuencia <= 0:
+                raise ValueError
+
+            self.stm32.enviar(
+                f"LFREQ:{frecuencia}"
             )
 
         except ValueError:
 
-            messagebox.showwarning(
-                "Frecuencia inválida",
-                "Ingresá un número válido."
+            messagebox.showerror(
+                "Frecuencia",
+                "Ingresá una frecuencia válida."
             )
 
-            return
+
+    def encender_L(self):
+
+        if self.stm32.enviar("LON"):
+            self.estado_L = True
 
 
-        if frecuencia <= 0:
+    def apagar_L(self):
 
-            messagebox.showwarning(
-                "Frecuencia inválida",
-                "La frecuencia debe ser mayor que cero."
+        if self.stm32.enviar("LOFF"):
+            self.estado_L = False
+
+
+    # ========================================================
+    # CANAL RIGHT
+    # ========================================================
+
+    def cambiar_slider_R(self, valor):
+
+        porcentaje = int(
+            float(valor)
+        )
+
+        self.amplitud_R.set(
+            porcentaje
+        )
+
+        if self.unidad_amp_R.get() == "%":
+
+            self.label_amp_R.config(
+                text=f"{porcentaje} %"
             )
 
-            return
+        else:
+
+            voltaje = self.porcentaje_a_voltaje(
+                porcentaje
+            )
+
+            self.label_amp_R.config(
+                text=f"{voltaje:.2f} V"
+            )
 
 
-        self.stm32.enviar(
-            f"FREQ:{frecuencia}"
-        )
+    def cambiar_unidad_R(self, event=None):
+
+        porcentaje = self.amplitud_R.get()
+
+        if self.unidad_amp_R.get() == "%":
+
+            self.label_amp_R.config(
+                text=f"{porcentaje} %"
+            )
+
+        else:
+
+            voltaje = self.porcentaje_a_voltaje(
+                porcentaje
+            )
+
+            self.label_amp_R.config(
+                text=f"{voltaje:.2f} V"
+            )
 
 
-    # ========================================================
-    # ACTUALIZAR AMPLITUD
-    # ========================================================
+    def actualizar_amplitud_R(self):
 
-    def actualizar_amplitud(self):
-
-        amplitud = int(
-            self.amplitud.get()
-        )
-
-
-        self.stm32.enviar(
-            f"AMP:{amplitud}"
-        )
-
-
-    # ========================================================
-    # ENCENDER
-    # ========================================================
-
-    def encender(self):
-
-        self.stm32.enviar(
-            "ON"
-        )
-
-
-    # ========================================================
-    # APAGAR
-    # ========================================================
-
-    def apagar(self):
+        porcentaje = self.amplitud_R.get()
 
         self.stm32.enviar(
-            "OFF"
+            f"RAMP:{porcentaje}"
         )
 
 
-    # ========================================================
-    # CERRAR
-    # ========================================================
+    def actualizar_frecuencia_R(self):
 
-    def cerrar(self):
+        try:
 
-        self.stm32.desconectar()
+            frecuencia = float(
+                self.frecuencia_R.get()
+            )
 
-        self.root.destroy()
+            if frecuencia <= 0:
+                raise ValueError
+
+            self.stm32.enviar(
+                f"RFREQ:{frecuencia}"
+            )
+
+        except ValueError:
+
+            messagebox.showerror(
+                "Frecuencia",
+                "Ingresá una frecuencia válida."
+            )
+
+
+    def encender_R(self):
+
+        if self.stm32.enviar("RON"):
+            self.estado_R = True
+
+
+    def apagar_R(self):
+
+        if self.stm32.enviar("ROFF"):
+            self.estado_R = False
 
 
 # ============================================================
-# PROGRAMA PRINCIPAL
+# MAIN
 # ============================================================
 
 if __name__ == "__main__":
@@ -407,3 +868,4 @@ if __name__ == "__main__":
     app = Aplicacion(root)
 
     root.mainloop()
+

@@ -26,15 +26,28 @@
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
+typedef enum {
+
+	LEFT,
+	RIGHT
+
+}canal_e;
+
+typedef enum {
+
+	OFF,
+	ON
+
+}estado_e;
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
 
-float frecuencia = 1000.0f;
-uint32_t amplitud = 50;
-uint8_t salida_activa = 0;
+float frecuencia[2] = {1000.0f, 1000.0f};
+uint32_t amplitud[2] = {100, 100};
+uint8_t salida_activa[2] = {ON, ON};
 
 /* USER CODE END PV */
 
@@ -363,21 +376,52 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
 
 static void parse_command(char *command)
 {
-    if (strncmp(command, "FREQ:", 5) == 0)
+    // Frecuencia canal izquierdo
+    if (strncmp(command, "LFREQ:", 6) == 0)
     {
-        frecuencia = atof(&command[5]);
+        frecuencia[LEFT] = atof(&command[6]);
     }
-    else if (strncmp(command, "AMP:", 4) == 0)
+
+    // Frecuencia canal derecho
+    else if (strncmp(command, "RFREQ:", 6) == 0)
     {
-        amplitud = atoi(&command[4]);
+        frecuencia[RIGHT] = atof(&command[6]);
     }
-    else if (strcmp(command, "ON") == 0)
+
+    // Amplitud canal izquierdo
+    else if (strncmp(command, "LAMP:", 5) == 0)
     {
-        salida_activa = 1;
+        amplitud[LEFT] = atoi(&command[5]);
     }
-    else if (strcmp(command, "OFF") == 0)
+
+    // Amplitud canal derecho
+    else if (strncmp(command, "RAMP:", 5) == 0)
     {
-        salida_activa = 0;
+        amplitud[RIGHT] = atoi(&command[5]);
+    }
+
+    // Encender canal izquierdo
+    else if (strcmp(command, "LON") == 0)
+    {
+        salida_activa[LEFT] = 1;
+    }
+
+    // Encender canal derecho
+    else if (strcmp(command, "RON") == 0)
+    {
+        salida_activa[RIGHT] = 1;
+    }
+
+    // Apagar canal izquierdo
+    else if (strcmp(command, "LOFF") == 0)
+    {
+        salida_activa[LEFT] = 0;
+    }
+
+    // Apagar canal derecho
+    else if (strcmp(command, "ROFF") == 0)
+    {
+        salida_activa[RIGHT] = 0;
     }
 }
 

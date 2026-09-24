@@ -29,6 +29,19 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+typedef enum {
+
+	LEFT,
+	RIGHT
+
+}canal_e;
+
+typedef enum {
+
+	OFF,
+	ON
+
+}estado_e;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -61,11 +74,12 @@ DMA_HandleTypeDef hdma_spi2_tx;
 /* USER CODE BEGIN PV */
 uint32_t          acc[2] = {0, 0};              // acumuladores de fase (uno por canal)
 volatile uint32_t ftw[2] = {0, 0};              // FTW de cada canal (lo cambia el parser)
-volatile uint8_t  salida_on[2] = {1, 1};        // 1 = canal sonando, 0 = mudo
+volatile uint8_t  salida_estado[2] = {ON, ON};
 volatile int32_t  amp[2] = {AMP_MAX, AMP_MAX};  // amplitud de cada canal
-volatile uint8_t  canal = 0;                    // canal "activo" (el que edita el teclado)
+volatile uint8_t  canal_seleccionado = LEFT;                    // canal "activo" (el que edita el teclado)
 uint16_t          audio_buf[BUF_HW];            // el buffer circular del DMA
 
+// Parametros que llegan desde USB
 extern float frecuencia;
 extern uint32_t amplitud;
 extern uint8_t salida_activa;
@@ -324,7 +338,7 @@ static void fill(uint16_t *dst)
             acc[c] += ftw[c];                          // avanzo la fase del canal
             int32_t v = sine_table[acc[c] >> 19];      // busco el seno (índice = 13 bits altos)
 //            v = (int32_t)(((int64_t)v * amp[c]) >> AMP_SHIFT);  // aplico volumen
-            if (!salida_on[c]) v = 0;                  // si el canal está mudo → 0
+            if (!salida_estado[c]) v = 0;                  // si el canal está mudo → 0
             s[c] = v;
         }
 
