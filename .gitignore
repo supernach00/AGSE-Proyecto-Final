@@ -18,3 +18,10 @@ Thumbs.db
 
 __pycache__/
 *.pyc
+
+# --- KiCad (archivos locales / temporales) ---
+*.lck
+*-backups/
+*.kicad_prl
+fp-info-cache
+_autosave-*

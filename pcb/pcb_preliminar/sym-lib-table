@@ -1,0 +1,4 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "pcb_preliminar") (type "KiCad") (uri "${KIPRJMOD}/pcb_preliminar.kicad_sym") (options "") (descr ""))
+)
